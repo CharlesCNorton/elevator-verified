@@ -835,6 +835,144 @@ Module ElevatorFire.
       lia.
   Qed.
 
+  (** FireServiceEnable increases count by at most 1 for a single car. *)
+  Lemma fire_service_enable_count_single : forall c,
+    match mode (apply c FireServiceEnable) with
+    | FireService => 1
+    | _ => 0
+    end <=
+    match mode c with
+    | FireService => 1
+    | _ => 0
+    end + 1.
+  Proof.
+    intros c.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl.
+    destruct (Nat.eqb cid designated_fire_car) eqn:Hcar;
+    destruct (pressurized fl) eqn:Hp; simpl;
+    destruct m; simpl; lia.
+  Qed.
+
+  (** Commands other than FireServiceEnable do not increase fire service count. *)
+  Lemma non_fire_enable_preserves_mode_class : forall c cmd,
+    cmd <> FireServiceEnable ->
+    match mode (apply c cmd) with
+    | FireService => 1
+    | _ => 0
+    end <=
+    match mode c with
+    | FireService => 1
+    | _ => 0
+    end.
+  Proof.
+    intros c cmd Hne.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl.
+    destruct cmd; simpl.
+    - destruct m; simpl; try lia; destruct mv; simpl; lia.
+    - destruct m; simpl; try lia; try (destruct mv; simpl; lia).
+      destruct ph; simpl; try lia; destruct mv; simpl; lia.
+    - unfold effective_recall_floor; simpl.
+      destruct (smoke_detected rf); destruct (Nat.eqb fl _); simpl; lia.
+    - exfalso; apply Hne; reflexivity.
+    - destruct m; simpl; lia.
+    - destruct m; simpl; lia.
+    - destruct mv; simpl; destruct m; simpl; lia.
+    - destruct mv; simpl; try (destruct m; simpl; lia).
+      unfold arrive; simpl.
+      destruct tg; simpl; try (destruct m; simpl; lia).
+      destruct (pressurized n); destruct m; simpl; lia.
+    - destruct mv; simpl; destruct m; simpl; lia.
+    - destruct m; simpl; lia.
+    - destruct mv; simpl; try (destruct m; simpl; lia).
+      destruct m; simpl; try lia.
+      destruct ph; simpl; lia.
+    - destruct m; simpl; lia.
+    - destruct m; simpl; try lia.
+      destruct mv; simpl; try lia.
+      destruct rdl; simpl; lia.
+  Qed.
+
+  (** Helper: count contribution of single car. *)
+  Definition fire_service_contrib (c : Car) : nat :=
+    match mode c with
+    | FireService => 1
+    | _ => 0
+    end.
+
+  (** Count equals sum of contributions. *)
+  Lemma count_fire_service_sum : forall b,
+    count_fire_service b = fold_right plus 0 (map fire_service_contrib b).
+  Proof.
+    induction b as [|c rest IH]; simpl.
+    - reflexivity.
+    - unfold fire_service_contrib at 1.
+      destruct (mode c); simpl; rewrite IH; lia.
+  Qed.
+
+  (** Helper for showing count preservation under apply_to_car. *)
+  Lemma count_fire_service_apply_to_car_non_fire_enable : forall idx cmd b,
+    cmd <> FireServiceEnable ->
+    count_fire_service (apply_to_car idx cmd b) <= count_fire_service b.
+  Proof.
+    intros idx cmd b Hne.
+    revert idx.
+    induction b as [|c rest IH]; intros idx; simpl.
+    - destruct idx; simpl; lia.
+    - destruct idx as [|n]; simpl.
+      + pose proof (non_fire_enable_preserves_mode_class c Hne) as Hpres.
+        destruct (mode (apply c cmd)); destruct (mode c); simpl in *; lia.
+      + pose proof (IH n) as IHspec.
+        destruct (mode c); simpl; lia.
+  Qed.
+
+  (** FireServiceEnable increases building count by at most 1. *)
+  Lemma count_fire_service_apply_to_car_fire_enable : forall idx b,
+    count_fire_service (apply_to_car idx FireServiceEnable b) <=
+    count_fire_service b + 1.
+  Proof.
+    intros idx b.
+    generalize dependent idx.
+    induction b as [|c rest IH]; intros idx; simpl.
+    - destruct idx; simpl; lia.
+    - destruct idx as [|n]; simpl.
+      + destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl.
+        destruct (Nat.eqb cid designated_fire_car);
+        destruct (pressurized fl);
+        destruct m; simpl; lia.
+      + specialize (IH n).
+        destruct (mode c); simpl; lia.
+  Qed.
+
+  (** System safety preserved for non-FireServiceEnable commands. *)
+  Lemma system_safe_preserved_non_fire_enable : forall idx cmd b,
+    cmd <> FireServiceEnable ->
+    system_safe b ->
+    system_safe (apply_to_car idx cmd b).
+  Proof.
+    intros idx cmd b Hne [Hcars Hcount].
+    split.
+    - apply all_cars_safe_preserved.
+      exact Hcars.
+    - unfold at_most_one_fire_service in *.
+      pose proof (@count_fire_service_apply_to_car_non_fire_enable idx cmd b Hne).
+      lia.
+  Qed.
+
+  (** System safety preserved for FireServiceEnable when no car currently in FireService. *)
+  Lemma system_safe_preserved_fire_enable_from_zero : forall idx b,
+    system_safe b ->
+    count_fire_service b = 0 ->
+    system_safe (apply_to_car idx FireServiceEnable b).
+  Proof.
+    intros idx b [Hcars Hcount] Hzero.
+    split.
+    - apply all_cars_safe_preserved.
+      exact Hcars.
+    - unfold at_most_one_fire_service in *.
+      pose proof (count_fire_service_apply_to_car_fire_enable idx b).
+      lia.
+  Qed.
+
   (** ===== LIVENESS / CONTROLLABILITY ===== *)
 
   (** Arrive brings car to target floor if pressurized. *)
@@ -962,6 +1100,263 @@ Module ElevatorFire.
     unfold arrive; simpl.
     rewrite Hpres.
     auto.
+  Qed.
+
+  (** ===== ALARM MANAGEMENT ===== *)
+
+  (** Alarm only becomes true via Tick when deadline expires during recall travel. *)
+  Lemma alarm_only_from_tick : forall c cmd,
+    cmd <> Tick ->
+    alarm (apply c cmd) = alarm c \/ alarm (apply c cmd) = false.
+  Proof.
+    intros c cmd Hne.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl.
+    destruct cmd; simpl.
+    - destruct m; simpl; try (left; reflexivity).
+      destruct mv; simpl; left; reflexivity.
+    - destruct m; simpl; try (left; reflexivity).
+      + destruct mv; simpl; left; reflexivity.
+      + destruct ph; simpl; try (left; reflexivity).
+        destruct mv; simpl; left; reflexivity.
+    - unfold effective_recall_floor; simpl.
+      destruct (smoke_detected rf) eqn:Hs.
+      + destruct (Nat.eqb fl arf); simpl; right; reflexivity.
+      + destruct (Nat.eqb fl rf); simpl; right; reflexivity.
+    - destruct (Nat.eqb cid designated_fire_car); destruct (pressurized fl); simpl;
+      left; reflexivity.
+    - destruct m; simpl; left; reflexivity.
+    - destruct m; simpl; left; reflexivity.
+    - destruct mv; simpl; left; reflexivity.
+    - destruct mv; simpl; try (left; reflexivity).
+      unfold arrive; simpl.
+      destruct tg; simpl; try (left; reflexivity).
+      destruct (pressurized n); simpl; left; reflexivity.
+    - destruct mv; simpl; try (left; reflexivity).
+      destruct m; simpl; left; reflexivity.
+    - left; reflexivity.
+    - destruct mv; simpl; try (left; reflexivity).
+      destruct m; simpl; try (left; reflexivity).
+      destruct ph; simpl; left; reflexivity.
+    - destruct m; simpl; left; reflexivity.
+    - exfalso; apply Hne; reflexivity.
+  Qed.
+
+  (** Tick only raises alarm in FireRecall mode while moving with deadline = 0. *)
+  Lemma tick_alarm_condition : forall c,
+    alarm (apply c Tick) = true ->
+    alarm c = true \/ (mode c = FireRecall /\ moving c = true /\ recall_deadline c = 0).
+  Proof.
+    intros c Halm.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    destruct m; simpl in *.
+    - left; exact Halm.
+    - destruct mv; simpl in *.
+      + destruct rdl; simpl in *.
+        * right; auto.
+        * left; exact Halm.
+      + left; exact Halm.
+    - left; exact Halm.
+  Qed.
+
+  (** Alarm is preserved by all commands except those that explicitly clear it. *)
+  Lemma alarm_monotonic_except_recall : forall c cmd,
+    alarm c = true ->
+    cmd <> Recall ->
+    alarm (apply c cmd) = true.
+  Proof.
+    intros c cmd Halm Hne.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    subst alm.
+    destruct cmd; simpl.
+    all: try reflexivity.
+    all: try (destruct m; simpl; reflexivity).
+    all: try (destruct m; simpl; try reflexivity; destruct mv; simpl; reflexivity).
+    all: try (destruct m; simpl; try reflexivity; destruct ph; simpl; try reflexivity; destruct mv; simpl; reflexivity).
+    all: try (exfalso; apply Hne; reflexivity).
+    all: try (destruct (Nat.eqb cid designated_fire_car); destruct (pressurized fl); simpl; reflexivity).
+    all: try (destruct mv; simpl; reflexivity).
+    all: try (destruct mv; simpl; try reflexivity; unfold arrive; simpl; destruct tg; simpl; try reflexivity; destruct (pressurized n); simpl; reflexivity).
+    all: try (destruct mv; simpl; try reflexivity; destruct m; simpl; try reflexivity; unfold set_door; simpl; reflexivity).
+    all: try (unfold set_door; simpl; reflexivity).
+    all: try (destruct mv; simpl; try reflexivity; destruct m; simpl; try reflexivity; destruct ph; simpl; try reflexivity; unfold set_door_hold; simpl; reflexivity).
+    all: try (destruct m; simpl; try reflexivity; unfold set_door_hold; simpl; reflexivity).
+    all: try (destruct m; simpl; try reflexivity; destruct mv; simpl; try reflexivity; destruct rdl; simpl; reflexivity).
+  Qed.
+
+  (** ===== DOOR STATE MANAGEMENT ===== *)
+
+  (** Doors can only open in Normal mode (outside fire modes). *)
+  Lemma open_door_only_in_normal : forall c,
+    moving c = false ->
+    mode c <> Normal ->
+    door (apply c OpenDoor) = door c.
+  Proof.
+    intros c Hmv Hm.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    rewrite Hmv.
+    destruct m; simpl; try reflexivity.
+    exfalso; apply Hm; reflexivity.
+  Qed.
+
+  (** CloseDoor always closes doors regardless of mode. *)
+  Lemma close_door_always_closes : forall c,
+    door (apply c CloseDoor) = Closed.
+  Proof.
+    intros c.
+    destruct c; simpl.
+    reflexivity.
+  Qed.
+
+  (** In FireService, doors only open via HoldDoorOpen with PhaseII enabled. *)
+  Lemma fire_service_door_open_requires_hold : forall c,
+    mode c = FireService ->
+    moving c = false ->
+    phaseII c = true ->
+    door (apply c HoldDoorOpen) = Open.
+  Proof.
+    intros c Hm Hmv Hph.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    rewrite Hm, Hmv, Hph.
+    reflexivity.
+  Qed.
+
+  (** ReleaseDoorOpen closes doors in FireService mode. *)
+  Lemma release_door_closes_in_fire_service : forall c,
+    mode c = FireService ->
+    door (apply c ReleaseDoorOpen) = Closed.
+  Proof.
+    intros c Hm.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    rewrite Hm.
+    reflexivity.
+  Qed.
+
+  (** ===== MODE TRANSITION COMPLETENESS ===== *)
+
+  (** Only Recall can enter FireRecall mode. *)
+  Lemma only_recall_enters_fire_recall : forall c cmd,
+    mode c <> FireRecall ->
+    cmd <> Recall ->
+    mode (apply c cmd) <> FireRecall.
+  Proof.
+    intros c cmd Hm Hne.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    destruct cmd; simpl.
+    all: try exact Hm.
+    all: try (destruct m; simpl; exact Hm).
+    all: try (destruct m; simpl; try exact Hm; destruct mv; simpl; exact Hm).
+    all: try (destruct m; simpl; try exact Hm; destruct ph; simpl; try exact Hm; destruct mv; simpl; exact Hm).
+    all: try (exfalso; apply Hne; reflexivity).
+    all: try (destruct (Nat.eqb cid designated_fire_car); destruct (pressurized fl); simpl; try exact Hm; discriminate).
+    all: try (destruct mv; simpl; destruct m; simpl; exact Hm).
+    all: try (destruct mv; simpl; try exact Hm; unfold arrive; simpl; destruct tg; simpl; try exact Hm; destruct (pressurized n); simpl; destruct m; simpl; exact Hm).
+    all: try (destruct m; simpl; try exact Hm; destruct mv; simpl; try exact Hm; destruct rdl; simpl; exact Hm).
+  Qed.
+
+  (** Only FireServiceEnable can enter FireService mode. *)
+  Lemma only_fire_enable_enters_fire_service : forall c cmd,
+    mode c <> FireService ->
+    cmd <> FireServiceEnable ->
+    mode (apply c cmd) <> FireService.
+  Proof.
+    intros c cmd Hm Hne.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    destruct cmd; simpl.
+    all: try exact Hm.
+    all: try (destruct m; simpl; exact Hm).
+    all: try (destruct m; simpl; try exact Hm; destruct mv; simpl; exact Hm).
+    all: try (destruct m; simpl; try exact Hm; exfalso; apply Hm; reflexivity).
+    all: try (unfold effective_recall_floor; simpl; destruct (smoke_detected rf); destruct (Nat.eqb fl _); simpl; discriminate).
+    all: try (exfalso; apply Hne; reflexivity).
+    all: try (destruct mv; simpl; destruct m; simpl; try exact Hm; exfalso; apply Hm; reflexivity).
+    all: try (destruct mv; simpl; try exact Hm; unfold arrive; simpl; destruct tg; simpl; try exact Hm; destruct (pressurized n); simpl; destruct m; simpl; try exact Hm; exfalso; apply Hm; reflexivity).
+    all: try (destruct mv; simpl; try exact Hm; destruct m; simpl; try exact Hm; exfalso; apply Hm; reflexivity).
+    all: try (destruct m; simpl; try exact Hm; destruct mv; simpl; try exact Hm; destruct rdl; simpl; try exact Hm; exfalso; apply Hm; reflexivity).
+  Qed.
+
+  (** ===== PHASEII MANAGEMENT ===== *)
+
+  (** PhaseII can only be enabled in FireService mode. *)
+  Lemma phaseII_only_in_fire_service : forall c,
+    mode c <> FireService ->
+    phaseII (apply c EnablePhaseII) = phaseII c.
+  Proof.
+    intros c Hm.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    destruct m; simpl; try reflexivity.
+    exfalso; apply Hm; reflexivity.
+  Qed.
+
+  (** EnablePhaseII in FireService mode enables phaseII. *)
+  Lemma enable_phaseII_in_fire_service : forall c,
+    mode c = FireService ->
+    phaseII (apply c EnablePhaseII) = true.
+  Proof.
+    intros c Hm.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    rewrite Hm.
+    reflexivity.
+  Qed.
+
+  (** DisablePhaseII in FireService mode disables phaseII. *)
+  Lemma disable_phaseII_in_fire_service : forall c,
+    mode c = FireService ->
+    phaseII (apply c DisablePhaseII) = false.
+  Proof.
+    intros c Hm.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    rewrite Hm.
+    reflexivity.
+  Qed.
+
+  (** ===== FLOOR INVARIANTS ===== *)
+
+  (** Floor only changes on Arrive. *)
+  Lemma floor_only_changes_on_arrive : forall c cmd,
+    cmd <> Arrive ->
+    cmd <> Recall \/ floor c = effective_recall_floor c ->
+    floor (apply c cmd) = floor c.
+  Proof.
+    intros c cmd Hne Hrecall.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl.
+    destruct cmd; simpl.
+    all: try reflexivity.
+    all: try (destruct m; simpl; reflexivity).
+    all: try (destruct m; simpl; try reflexivity; destruct mv; simpl; reflexivity).
+    all: try (destruct m; simpl; try reflexivity; destruct ph; simpl; try reflexivity; destruct mv; simpl; reflexivity).
+    all: try (unfold effective_recall_floor in *; simpl in *; destruct Hrecall as [Hne2 | Heq]; [exfalso; apply Hne2; reflexivity | destruct (smoke_detected rf); simpl; rewrite <- Heq; rewrite PeanoNat.Nat.eqb_refl; reflexivity]).
+    all: try (destruct (Nat.eqb cid designated_fire_car); destruct (pressurized fl); simpl; reflexivity).
+    all: try (destruct mv; simpl; reflexivity).
+    all: try (exfalso; apply Hne; reflexivity).
+    all: try (destruct mv; simpl; try reflexivity; destruct m; simpl; reflexivity).
+    all: try (destruct mv; simpl; try reflexivity; destruct m; simpl; try reflexivity; destruct ph; simpl; reflexivity).
+    all: try (destruct m; simpl; try reflexivity; destruct mv; simpl; try reflexivity; destruct rdl; simpl; reflexivity).
+  Qed.
+
+  (** Target only changes on StartMove, Arrive, or mode-changing commands. *)
+  Lemma target_set_on_start_move : forall c f,
+    moving c = false ->
+    target (apply c (StartMove f)) = Some f.
+  Proof.
+    intros c f Hmv.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    rewrite Hmv.
+    reflexivity.
+  Qed.
+
+  (** Target cleared on Arrive when moving. *)
+  Lemma target_cleared_on_arrive : forall c,
+    moving c = true ->
+    target c <> None ->
+    target (apply c Arrive) = None.
+  Proof.
+    intros c Hmv Htgt.
+    destruct c as [cid m d mv fl tg ph dh rf arf rdl alm]; simpl in *.
+    rewrite Hmv; simpl.
+    unfold arrive; simpl.
+    destruct tg; simpl.
+    - destruct (pressurized n); simpl; reflexivity.
+    - exfalso; apply Htgt; reflexivity.
   Qed.
 
 End ElevatorFire.
